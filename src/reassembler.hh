@@ -1,12 +1,30 @@
 #pragma once
 
 #include "byte_stream.hh"
+#include <cstdint>
+#include <string>
+#include <map>
 
 class Reassembler
 {
+  private:
+  ByteStream output_;
+// a structure to hold pending chunks
+  std::map<uint64_t, std::string> pending_;
+
+  uint64_t next_index_;   // what’s the next byte position we’re waiting for
+  uint64_t last_index_ ; // where the stream ends if last substring received
+  bool last_seen_ ;
+
+  
 public:
   // Construct Reassembler to write into given ByteStream.
-  explicit Reassembler( ByteStream&& output ) : output_( std::move( output ) ) {}
+  explicit Reassembler( ByteStream&& output )   : output_( std::move( output ) ),
+    pending_(),
+    next_index_( 0 ),
+    last_index_( UINT64_MAX ),
+    last_seen_( false )
+      {}
 
   /*
    * Insert a new substring to be reassembled into a ByteStream.
@@ -41,6 +59,5 @@ public:
   // Access output stream writer, but const-only (can't write from outside)
   const Writer& writer() const { return output_.writer(); }
 
-private:
-  ByteStream output_;
+
 };

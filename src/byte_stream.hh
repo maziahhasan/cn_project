@@ -5,6 +5,7 @@
 #include <string_view>
 #include<deque>
 #include<cstdint>
+#include<map>
 
 class Reader;
 class Writer;
