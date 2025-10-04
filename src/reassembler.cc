@@ -5,64 +5,88 @@ using namespace std;
 
 void Reassembler::insert( uint64_t first_index, string data, bool is_last_substring )
 {
-// Mark end of stream if this chunk is flagged
-  if ( is_last_substring ) {
+ // --- mark end of stream if flagged ---
+  if (is_last_substring) {
     last_seen_ = true;
     last_index_ = first_index + data.size();
   }
 
-  
-// Special case: if stream is empty and last substring is at 0
-if (last_seen_ && next_index_ == last_index_) {
-  output_.writer().close();
-  return; // we’re done
-}
-
-   // --- Trim left: drop data before next_index_ ---
-  if ( first_index + data.size() <= next_index_ ) {
-    return; // whole chunk already written
+  // --- special case: empty stream ends immediately ---
+  if (last_seen_ && next_index_ == last_index_) {
+    output_.writer().close();
+    return;
   }
-  if ( first_index < next_index_ ) {
+
+  // --- left trim: drop already written bytes ---
+  if (first_index + data.size() <= next_index_) {
+    return; // whole chunk is old
+  }
+  if (first_index < next_index_) {
     size_t cut = next_index_ - first_index;
-    data.erase( 0, cut );
+    data.erase(0, cut);
     first_index = next_index_;
   }
 
-   // --- Trim right: respect ByteStream capacity ---
+  // --- right trim: respect capacity ---
   uint64_t cap = output_.writer().available_capacity();
-  if ( first_index >= next_index_ + cap ) {
-    return; // can’t fit anything
-  }
-  if ( first_index + data.size() > next_index_ + cap ) {
-    data.resize( ( next_index_ + cap ) - first_index );
-  }
+  uint64_t stream_limit = next_index_ + cap;
 
-   // --- Store substring ---
-  if ( !data.empty() ) {
-    pending_[first_index] = data;
+  if (first_index >= stream_limit) {
+    return; // completely beyond window
+  }
+  if (first_index + data.size() > stream_limit) {
+    data.resize(stream_limit - first_index);
   }
 
-  // --- Try to flush contiguous bytes into ByteStream ---
-  while ( true ) {
-    auto it = pending_.find( next_index_ );
-    if ( it == pending_.end() ) break;
-
-    // Write this chunk
-    output_.writer().push( it->second );
-    next_index_ += it->second.size();
-    pending_.erase( it );
+  if (data.empty()) {
+    return;
   }
 
-  // --- Close if we’ve reached the declared end ---
-  if ( last_seen_ && next_index_ == last_index_ ) {
+  // --- merge with overlapping pending chunks ---
+  auto it = pending_.lower_bound(first_index);
+
+  // merge with previous if overlapping
+  if (it != pending_.begin()) {
+    auto prev = std::prev(it);
+    uint64_t prev_end = prev->first + prev->second.size();
+    if (prev_end >= first_index) {
+      size_t overlap = prev_end - first_index;
+      if (overlap < data.size()) {
+        prev->second += data.substr(overlap);
+      }
+      first_index = prev->first;
+      data = prev->second;
+      pending_.erase(prev);
+    }
+  }
+
+  // merge forward with any following overlapping chunks
+  while (it != pending_.end() && it->first <= first_index + data.size()) {
+    uint64_t overlap = (first_index + data.size()) - it->first;
+    if (overlap < it->second.size()) {
+      data += it->second.substr(overlap);
+    }
+    auto erase_it = it++;
+    pending_.erase(erase_it);
+  }
+
+  // store merged chunk
+  pending_[first_index] = data;
+
+  // --- try flushing contiguous data into ByteStream ---
+  while (true) {
+    auto it2 = pending_.find(next_index_);
+    if (it2 == pending_.end()) break;
+
+    output_.writer().push(it2->second);
+    next_index_ += it2->second.size();
+    pending_.erase(it2);
+  }
+
+  // --- close if we've written the last byte ---
+  if (last_seen_ && next_index_ == last_index_) {
     output_.writer().close();
   }
-
-
-
-
-
-
 
   debug( "unimplemented insert({}, {}, {}) called", first_index, data, is_last_substring );
 }
