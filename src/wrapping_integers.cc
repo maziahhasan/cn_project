@@ -13,23 +13,21 @@ Wrap32 Wrap32::wrap( uint64_t n, Wrap32 zero_point )
 }
 
 // Convert a wrapped seqno back to the absolute seqno nearest to the checkpoint
-uint64_t Wrap32::unwrap( Wrap32 zero_point, uint64_t checkpoint ) const
-{
-  const uint64_t base = zero_point.raw_value_;
-  const uint64_t val = raw_value_;
-  const uint64_t mod = 1ull << 32;
+uint64_t Wrap32::unwrap(Wrap32 zero_point, uint64_t checkpoint) const {
+    const uint64_t mod = 1ull << 32;
 
-  // offset of this seqno relative to zero_point, in 0 … 2^32-1
-  const uint64_t offset = ( val + mod - base ) % mod;
+    // Offset between this value and zero_point (mod 2^32)
+    uint64_t offset = (static_cast<uint64_t>(raw_value_) + mod - static_cast<uint64_t>(zero_point.raw_value_)) % mod;
 
-  // candidate absolute seqno close to checkpoint
-  uint64_t candidate = ( checkpoint & ~( mod - 1 ) ) + offset;
+    // Base candidate near checkpoint
+    uint64_t candidate = (checkpoint & ~(mod - 1)) + offset;
 
-  // adjust if wrapping the other way is closer
-  if ( candidate + ( mod >> 1 ) < checkpoint )
-    candidate += mod;
-  else if ( checkpoint + ( mod >> 1 ) < candidate )
-    candidate -= mod;
+    // Adjust by Â±2^32 if a wrapped version is closer to the checkpoint
+    if (candidate + (mod >> 1) < checkpoint)
+        candidate += mod;
+    else if (checkpoint + (mod >> 1) < candidate && candidate >= mod)
+        candidate -= mod;
 
-  return candidate;
+    return candidate;
 }
+

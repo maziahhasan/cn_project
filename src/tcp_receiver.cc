@@ -25,6 +25,10 @@ void TCPReceiver::receive( TCPSenderMessage message )
   // compute stream index (subtract 1 for SYN)
   uint64_t stream_index = abs_seqno - 1;
 
+   // handle SYN+FIN with no payload edge case
+    if (message.SYN && stream_index == static_cast<uint64_t>(-1))
+        stream_index = 0;
+
   // feed data into the Reassembler
   reassembler_.insert( stream_index, message.payload, message.FIN );
 }
@@ -39,8 +43,12 @@ TCPReceiverMessage TCPReceiver::send() const
   }
 
   // no SYN seen yet → no ackno
-  if ( !isn_.has_value() )
+  if (!isn_.has_value()) {
+    msg.window_size = static_cast<uint16_t>(
+        std::min<uint64_t>(UINT16_MAX, reassembler_.writer().available_capacity())
+    );
     return msg;
+}
 
   const auto& writer = reassembler_.writer();
 
