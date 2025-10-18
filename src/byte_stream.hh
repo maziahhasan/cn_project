@@ -1,4 +1,5 @@
 ﻿#pragma once
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@ class Writer : public ByteStream
 {
 public:
   using ByteStream::ByteStream;
+
   void push( std::string data );
   void close();
   bool is_closed() const;
@@ -42,6 +44,7 @@ class Reader : public ByteStream
 {
 public:
   using ByteStream::ByteStream;
+
   std::string_view peek() const;
   void pop( uint64_t len );
   bool is_finished() const;

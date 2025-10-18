@@ -9,13 +9,10 @@ ByteStream::ByteStream( uint64_t capacity )
 {}
 
 /* Writer methods */
-
 void Writer::push( string data )
 {
-  // Only write as many bytes as there is available capacity
   uint64_t can_write = available_capacity();
   uint64_t n = min<uint64_t>( can_write, data.size() );
-
   buffer_.append( data.substr( 0, n ) );
   total_pushed_ += n;
 }
@@ -24,24 +21,20 @@ void Writer::close()
 {
   closed_ = true;
 }
-
 bool Writer::is_closed() const
 {
   return closed_;
 }
-
 uint64_t Writer::available_capacity() const
 {
   return capacity_ - buffer_.size();
 }
-
 uint64_t Writer::bytes_pushed() const
 {
   return total_pushed_;
 }
 
 /* Reader methods */
-
 string_view Reader::peek() const
 {
   return string_view( buffer_.data(), buffer_.size() );
@@ -58,12 +51,10 @@ bool Reader::is_finished() const
 {
   return closed_ && buffer_.empty();
 }
-
 uint64_t Reader::bytes_buffered() const
 {
   return buffer_.size();
 }
-
 uint64_t Reader::bytes_popped() const
 {
   return total_popped_;
