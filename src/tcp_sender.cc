@@ -35,6 +35,11 @@ void TCPSender::stop_timer()
 // send helper: transmit and record outstanding if it consumes sequence space
 void TCPSender::send_segment( TCPSenderMessage& msg, const TransmitFunction& transmit )
 {
+
+   // ✅ Add this check:
+  if (input_.reader().has_error() || input_.writer().has_error())
+      msg.RST = true;
+
   transmit( msg );
 
   uint64_t len = msg.sequence_length();
@@ -75,6 +80,10 @@ void TCPSender::fill_window( const TransmitFunction& transmit )
   while ( bytes_in_flight_ < win_advertised ) {
     TCPSenderMessage msg;
     msg.seqno = Wrap32::wrap( next_seqno_, isn_ );
+    // If stream has errored, advertise RST on the outgoing segment immediately
+if ( input_.reader().has_error() || input_.writer().has_error() ) {
+    msg.RST = true;
+}
 
     // SYN at connection start
     if ( !syn_sent_ ) {
@@ -134,57 +143,52 @@ TCPSenderMessage TCPSender::make_empty_message() const
 {
   TCPSenderMessage msg;
   msg.seqno = Wrap32::wrap( next_seqno_, isn_ );
+
+  // ✅ If the stream has errored, set RST flag
+  if (input_.reader().has_error() || input_.writer().has_error())
+      msg.RST = true;
+
   return msg;
 }
 
 void TCPSender::receive( const TCPReceiverMessage& msg )
 {
-  // Update receiver window and process ack if present
+  // ✅ If the peer’s receiver sent RST, mark our stream as errored
+  if ( msg.RST ) {
+    input_.reader().set_error();
+    input_.writer().set_error();
+    return; // nothing more to do
+  }
+
   if ( msg.ackno.has_value() ) {
-    // unwrap the ackno using current isn_ and checkpoint around receiver_ackno_
     uint64_t abs_ack = msg.ackno->unwrap( isn_, receiver_ackno_ );
 
-    // ignore invalid ack (beyond what we've sent)
-    if ( abs_ack > next_seqno_ ) {
-      // invalid future ack: ignore
-    } else {
-      if ( abs_ack > receiver_ackno_ ) {
-        receiver_ackno_ = abs_ack;
+    if ( abs_ack <= next_seqno_ && abs_ack > receiver_ackno_ ) {
+      receiver_ackno_ = abs_ack;
 
-        // Remove outstanding segments that are fully acknowledged
-        while ( !outstanding_.empty() ) {
-          Outstanding& front = outstanding_.front();
-          uint64_t seg_end = front.seq_start + front.len;
-          if ( seg_end <= receiver_ackno_ ) {
-            // fully acknowledged
-            bytes_in_flight_ -= front.len;
-            outstanding_.pop_front();
-          } else {
-            break;
-          }
-        }
+      while ( !outstanding_.empty() ) {
+        Outstanding& front = outstanding_.front();
+        uint64_t seg_end = front.seq_start + front.len;
+        if ( seg_end <= receiver_ackno_ ) {
+          bytes_in_flight_ -= front.len;
+          outstanding_.pop_front();
+        } else break;
+      }
 
-        // On new ACK reset RTO to initial and consecutive retransmissions counter
-        RTO_ = initial_RTO_ms_;
-        consecutive_retx_ = 0;
-
-        // If outstanding remains, start timer; otherwise stop it
-        if ( !outstanding_.empty() ) {
-          timer_running_ = true;
-          timer_elapsed_ms_ = 0;
-        } else {
-          stop_timer();
-        }
+      RTO_ = initial_RTO_ms_;
+      consecutive_retx_ = 0;
+      if ( outstanding_.empty() )
+        stop_timer();
+      else {
+        timer_running_ = true;
+        timer_elapsed_ms_ = 0;
       }
     }
   }
 
-  // Always update advertised window (right edge) from receiver message
   receiver_window_ = msg.window_size;
-
-  // After processing ACK and window update, try to fill the window
-  fill_window( []( const TCPSenderMessage& ) { /* no-op transmit for internal call if needed */ } );
 }
+
 
 void TCPSender::tick( uint64_t ms_since_last_tick, const TransmitFunction& transmit )
 {
@@ -200,6 +204,10 @@ void TCPSender::tick( uint64_t ms_since_last_tick, const TransmitFunction& trans
   if ( timer_elapsed_ms_ >= RTO_ ) {
     // retransmit earliest outstanding segment
     Outstanding& earliest = outstanding_.front();
+    // Ensure retransmitted message carries RST if stream errored
+if ( input_.reader().has_error() || input_.writer().has_error() ) {
+    earliest.msg.RST = true;
+}
     transmit( earliest.msg );
 
     // Only count/scale RTO if receiver window not zero
