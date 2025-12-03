@@ -1,38 +1,90 @@
-Checkpoint 3 Writeup
-====================
+My name:
 
-My name: [your name here]
+Maziah hasan 23L-0795
 
-My SUNet ID: [your sunetid here]
+I collaborated with:
 
-I collaborated with: [list sunetids here]
+Anoosha khan 23L-0835
 
-I would like to thank/reward these classmates for their help: [list sunetids here]
 
-This checkpoint took me about [n] hours to do. I [did/did not] attend the lab session.
+This checkpoint took me about:
 
-Program Structure and Design of the TCPSender [Describe data
-structures and approach taken. Describe alternative designs considered
-or tested.  Describe benefits and weaknesses of your design compared
-with alternatives -- perhaps in terms of simplicity/complexity, risk
-of bugs, asymptotic performance, empirical performance, required
-implementation time and difficulty, and other factors. Include any
-measurements if applicable.]: []
+6-7 hours to do.
 
-Report from the hands-on component: []
+Program Structure and Design of the TCPSender
 
-Implementation Challenges:
-[]
+My TCPSender implementation manages outgoing TCP segments using a structured approach that tracks sequence numbers, retransmission timers, and outstanding messages.
 
-Remaining Bugs:
-[]
+The key data structures used include:
 
-- Optional: I had unexpected difficulty with: [describe]
+std::deque<Outstanding> — to store unacknowledged (outstanding) TCP segments with their starting sequence number and length.
 
-- Optional: I think you could make this lab better by: [describe]
+ByteStream — to manage the outgoing data from the application layer.
 
-- Optional: I was surprised by: [describe]
+Variables like next_seqno_, bytes_in_flight_, receiver_ackno_, and receiver_window_ — to track TCP state.
 
-- Optional: I'm not sure about: [describe]
+Wrap32 — for converting between absolute and wrapped sequence numbers.
 
-- Optional: I made an extra test I think will be helpful in catching bugs: [describe where to find]
+The design focuses on correctness and simplicity:
+
+Each outgoing segment is constructed and recorded using send_segment().
+
+fill_window() handles both data transmission and flag management (SYN, FIN, RST).
+
+A retransmission timer (RTO_) doubles after each timeout, ensuring TCP’s exponential backoff behavior.
+
+On receiving ACKs, the sender removes acknowledged segments from the outstanding queue and resets its timer.
+
+Alternative Designs Considered:
+One alternative was to store only unacknowledged byte ranges instead of entire messages. While this could reduce memory use, it would complicate retransmissions and make the implementation harder to debug.
+
+Benefits:
+
+Clear state management.
+
+Easy retransmission logic.
+
+Readable and modular code.
+
+Weaknesses:
+
+Slightly higher memory use due to storing whole messages.
+
+More data copying than an optimized TCP stack.
+
+Overall, the chosen design balances clarity and correctness — ideal for this educational implementation.
+
+Report from the Hands-on Component
+
+I verified the implementation by running all provided tests (check3).
+Special attention was given to RST-handling tests, window filling, and retransmission logic.
+Debug statements (via debug()) were used to trace SYN/FIN/RST flag behavior and validate retransmission timing.
+
+Implementation Challenges
+
+Understanding when to set and clear the retransmission timer.
+
+Properly handling RST in both directions:
+
+When the local stream errors → send RST.
+
+When a peer’s RST is received → set local error flags.
+
+Getting sequence number wrapping (Wrap32) correct for all edge cases.
+
+Ensuring fill_window() respects receiver window limits and does not oversend.
+
+Debugging failing tests that were sensitive to flag ordering or unacknowledged bytes.
+
+Remaining Bugs
+
+All tests for Checkpoint 3 now pass.
+No known bugs remain at this stage.
+
+Optional Reflections
+
+Unexpected Difficulty: Handling the interaction between retransmissions and the RST flag was trickier than expected.
+
+Could improve the lab by: Providing a small visual flow diagram of sender/receiver interactions would make debugging much easier.
+
+Surprised by: How small changes in flag order or acknowledgment logic could affect multiple tests.

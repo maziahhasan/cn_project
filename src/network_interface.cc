@@ -1,49 +1,147 @@
-#include <iostream>
-
-#include "arp_message.hh"
-#include "debug.hh"
-#include "ethernet_frame.hh"
-#include "exception.hh"
-#include "helpers.hh"
 #include "network_interface.hh"
+#include "arp_message.hh"
+#include "ipv4_datagram.hh"
+#include "ethernet_frame.hh"
+#include "parser.hh"
+
+#include <unordered_map>
+#include <iostream>
 
 using namespace std;
 
-//! \param[in] ethernet_address Ethernet (what ARP calls "hardware") address of the interface
-//! \param[in] ip_address IP (what ARP calls "protocol") address of the interface
-NetworkInterface::NetworkInterface( string_view name,
-                                    shared_ptr<OutputPort> port,
-                                    const EthernetAddress& ethernet_address,
-                                    const Address& ip_address )
-  : name_( name )
-  , port_( notnull( "OutputPort", move( port ) ) )
-  , ethernet_address_( ethernet_address )
-  , ip_address_( ip_address )
+static const size_t ARP_TTL = 30'000;      // 30 seconds
+static const size_t ARP_COOLDOWN = 5'000;  // 5 seconds
+
+static const EthernetAddress BROADCAST = {255,255,255,255,255,255};
+
+void NetworkInterface::send_datagram(const InternetDatagram &dgram,
+                                     const Address &next_hop)
 {
-  cerr << "DEBUG: Network interface has Ethernet address " << to_string( ethernet_address_ ) << " and IP address "
-       << ip_address.ip() << "\n";
+    uint32_t ip = next_hop.ipv4_numeric();
+
+    // If we know the MAC → send directly
+    if (arp_cache_.count(ip) && arp_cache_[ip].expires_at > time_ms_) {
+
+        EthernetFrame f;
+        f.header().src = ethernet_address_;
+        f.header().dst = arp_cache_[ip].mac;
+        f.header().type = EthernetHeader::TYPE_IPv4;
+
+        // Serialize datagram into BufferList
+        f.payload() = dgram.serialize();
+
+        transmit(f);
+        return;
+    }
+
+    // Otherwise queue it
+    waiting_[ip].push_back(dgram);
+
+    // Cooldown: don't spam ARP
+    if (!last_arp_request_.count(ip) ||
+        last_arp_request_[ip] + ARP_COOLDOWN <= time_ms_) 
+    {
+        last_arp_request_[ip] = time_ms_;
+
+        ARPMessage req;
+        req.opcode = ARPMessage::OPCODE_REQUEST;
+        req.hardware_type = ARPMessage::TYPE_ETHERNET;
+        req.protocol_type = ARPMessage::TYPE_IPv4;
+        req.hardware_address_size = 6;
+        req.protocol_address_size = 4;
+
+        req.sender_ethernet_address = ethernet_address_;
+        req.sender_ip_address = ip_address_.ipv4_numeric();
+        req.target_ethernet_address = {};
+        req.target_ip_address = ip;
+
+        EthernetFrame f;
+        f.header().src = ethernet_address_;
+        f.header().dst = BROADCAST;
+        f.header().type = EthernetHeader::TYPE_ARP;
+        f.payload() = req.serialize();
+
+        transmit(f);
+    }
 }
 
-//! \param[in] dgram the IPv4 datagram to be sent
-//! \param[in] next_hop the IP address of the interface to send it to (typically a router or default gateway, but
-//! may also be another host if directly connected to the same network as the destination) Note: the Address type
-//! can be converted to a uint32_t (raw 32-bit IP address) by using the Address::ipv4_numeric() method.
-void NetworkInterface::send_datagram( const InternetDatagram& dgram, const Address& next_hop )
+void NetworkInterface::recv_frame(EthernetFrame frame)
 {
-  debug( "unimplemented send_datagram called" );
-  (void)dgram;
-  (void)next_hop;
+    // Drop frames not for us
+    if (!(frame.header().dst == ethernet_address_ ||
+          frame.header().dst == BROADCAST))
+        return;
+
+    // IPv4
+    if (frame.header().type == EthernetHeader::TYPE_IPv4) {
+        InternetDatagram d;
+        if (d.parse(frame.payload()) == ParseResult::NoError)
+            datagrams_received_.push(d);
+        return;
+    }
+
+    // ARP
+    if (frame.header().type == EthernetHeader::TYPE_ARP) {
+        ARPMessage arp;
+        if (arp.parse(frame.payload()) != ParseResult::NoError)
+            return;
+
+        uint32_t sender_ip = arp.sender_ip_address;
+        EthernetAddress sender_mac = arp.sender_ethernet_address;
+
+        // Learn MAC
+        arp_cache_[sender_ip] = { sender_mac, time_ms_ + ARP_TTL };
+
+        // If this ARP solves waiting packets → send them
+        if (waiting_.count(sender_ip)) {
+            for (auto &d : waiting_[sender_ip]) {
+                EthernetFrame f;
+                f.header().src = ethernet_address_;
+                f.header().dst = sender_mac;
+                f.header().type = EthernetHeader::TYPE_IPv4;
+                f.payload() = d.serialize();
+                transmit(f);
+            }
+            waiting_.erase(sender_ip);
+        }
+
+        // If it's a request for US → reply
+        if (arp.opcode == ARPMessage::OPCODE_REQUEST &&
+            arp.target_ip_address == ip_address_.ipv4_numeric())
+        {
+            ARPMessage reply;
+            reply.opcode = ARPMessage::OPCODE_REPLY;
+            reply.hardware_type = ARPMessage::TYPE_ETHERNET;
+            reply.protocol_type = ARPMessage::TYPE_IPv4;
+            reply.hardware_address_size = 6;
+            reply.protocol_address_size = 4;
+
+            reply.sender_ethernet_address = ethernet_address_;
+            reply.sender_ip_address = ip_address_.ipv4_numeric();
+            reply.target_ethernet_address = sender_mac;
+            reply.target_ip_address = sender_ip;
+
+            EthernetFrame out;
+            out.header().src = ethernet_address_;
+            out.header().dst = sender_mac;
+            out.header().type = EthernetHeader::TYPE_ARP;
+            out.payload() = reply.serialize();
+
+            transmit(out);
+        }
+    }
 }
 
-//! \param[in] frame the incoming Ethernet frame
-void NetworkInterface::recv_frame( EthernetFrame frame )
+void NetworkInterface::tick(size_t ms_since_last_tick)
 {
-  debug( "unimplemented recv_frame called" );
-  (void)frame;
-}
+    time_ms_ += ms_since_last_tick;
 
-//! \param[in] ms_since_last_tick the number of milliseconds since the last call to this method
-void NetworkInterface::tick( const size_t ms_since_last_tick )
-{
-  debug( "unimplemented tick({}) called", ms_since_last_tick );
+    // Remove expired ARP entries
+    vector<uint32_t> expired;
+    for (auto &[ip, entry] : arp_cache_) {
+        if (entry.expires_at <= time_ms_)
+            expired.push_back(ip);
+    }
+    for (uint32_t ip : expired)
+        arp_cache_.erase(ip);
 }
