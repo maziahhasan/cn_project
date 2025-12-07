@@ -15,6 +15,7 @@ class Reassembler
   uint64_t next_index_;   // what’s the next byte position we’re waiting for
   uint64_t last_index_ ; // where the stream ends if last substring received
   bool last_seen_ ;
+  
 
   
 public:

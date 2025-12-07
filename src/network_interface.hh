@@ -1,30 +1,65 @@
 #pragma once
 
-#include <unordered_map>
-#include <string>
-#include <cstdint>
+#include "address.hh"
+#include "ethernet_frame.hh"
 #include "arp_message.hh"
-#include "ethernet_header.hh"
-#include "ipv4_header.hh"
+#include "ipv4_datagram.hh"
 
-// Network interface class
-class NetworkInterface
-{
+#include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <queue>
+#include <vector>
+#include <string>
+#include <memory>
+
+class NetworkInterface {
 public:
-    explicit NetworkInterface(const std::string& name);
+    class OutputPort {
+    public:
+        virtual void transmit(const NetworkInterface& nic, const EthernetFrame& frame) = 0;
+        virtual ~OutputPort() = default;
+    };
 
-    // Called periodically
-    void tick(size_t ms);
+    NetworkInterface(std::string name,
+                     std::shared_ptr<OutputPort> port,
+                     const EthernetAddress& hw,
+                     const Address& ip);
 
-    // Send ARP request
-    void send_arp_request(uint32_t target_ip);
+    // Constructor used when tests don't attach a port
+    NetworkInterface(const EthernetAddress& hw,
+                     const Address& ip);
+
+    void send_datagram(const InternetDatagram& dgram, const Address& next_hop);
+
+    std::optional<EthernetFrame> recv_frame(const EthernetFrame& frame);
+
+    void tick(size_t ms_elapsed);
+
+    std::optional<EthernetFrame> maybe_send();
+
+    std::queue<InternetDatagram>& datagrams_received() { return datagrams_in_; }
+
+    const std::string& name() const { return name_; }
 
 private:
-    std::string _name;
+    struct ARPEntry {
+        EthernetAddress mac{};
+        size_t ttl_ms{};
+    };
 
-    // Map IP -> MACAddress
-    std::unordered_map<uint32_t, MACAddress> _arp_table;
+    std::string name_;
+    std::shared_ptr<OutputPort> port_;
+    EthernetAddress hw_address_;
+    Address ip_address_;
 
-    // ARP timers
-    std::unordered_map<uint32_t, size_t> _arp_ttl;
+    std::queue<EthernetFrame> outgoing_frames_;
+    std::queue<InternetDatagram> datagrams_in_;
+
+    std::unordered_map<uint32_t, ARPEntry> arp_cache_;               // IP → MAC + TTL
+    std::unordered_map<uint32_t, size_t> arp_timer_;                 // IP → time since last ARP request
+    std::unordered_map<uint32_t, std::vector<InternetDatagram>> pending_; // IP → waiting datagrams
+
+    void transmit(const EthernetFrame& f);
+    void send_arp(uint32_t ip);
 };
